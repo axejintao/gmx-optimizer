@@ -1,7 +1,7 @@
 import time
 
 from brownie import (
-    MyStrategy,
+    GlpBlueberryFarmer,
     TheVault,
     interface,
     accounts,
@@ -118,7 +118,7 @@ def deployed(want, deployer, strategist, keeper, guardian, governance, proxyAdmi
     vault.setStrategist(deployer, {"from": governance})
     # NOTE: TheVault starts unpaused
 
-    strategy = MyStrategy.deploy({"from": deployer})
+    strategy = GlpBlueberryFarmer.deploy({"from": deployer})
     strategy.initialize(vault, [want])
     # NOTE: Strategy starts unpaused
 
