@@ -24,6 +24,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
     IRewardRouter public constant REWARDS_ROUTER = IRewardRouter(REWARDS_ROUTER_ADDRESS);
     IERC20Upgradeable public constant WETH = IERC20Upgradeable(WETH_ADDRESS);
     IERC20Upgradeable public constant GMX = IERC20Upgradeable(GMX_ADDRESS);
+    IERC20Upgradeable public constant FS_GLP = IERC20Upgradeable(want);
 
     /// @dev Initialize the Strategy with security settings as well as tokens
     /// @notice Proxies will set any non constant variable you declare as default value
@@ -43,7 +44,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
     /// @notice this provides security guarantees to the depositors they can't be sweeped away
     function getProtectedTokens() public view virtual override returns (address[] memory) {
         address[] memory protectedTokens = new address[](3);
-        protectedTokens[0] = want;
+        protectedTokens[0] = want; // FS_GLP_ADDRESS
         protectedTokens[1] = WETH_ADDRESS;
         protectedTokens[2] = GMX_ADDRESS;
         return protectedTokens;
@@ -56,37 +57,66 @@ contract GlpBlueberryFarmer is BaseStrategy {
 
     /// @dev Withdraw all funds, this is used for migrations, most of the time for emergency reasons
     function _withdrawAll() internal override {
+        // no-op, want is a fee staked token
     }
 
     /// @dev Withdraw `_amount` of want, so that it can be sent to the vault / depositor
     /// @notice just unlock the funds and return the amount you could unlock
     function _withdrawSome(uint256 _amount) internal override returns (uint256) {
-        // Add code here to unlock / withdraw `_amount` of tokens to the withdrawer
-        // If there's a loss, make sure to have the withdrawer pay the loss to avoid exploits
-        // Socializing loss is always a bad idea
-        return _amount;
+        // no-op, want is a fee staked token
     }
 
-
-    /// @dev Does this function require `tend` to be called?
+    /// @dev no-op, want is a fee staked token
     function _isTendable() internal override pure returns (bool) {
-        return false; // Change to true if the strategy should be tended
+        return false;
     }
 
     function _harvest() internal override returns (TokenAmount[] memory harvested) {
+        TokenAmount[] memory harvested = new TokenAmount[](2);
+        harvested[0].token = WETH_ADDRESS;
+        harvested[1].token = want;
+
+        uint256 fsGlpBalance = FS_GLP.balanceOf(address(this));
+
         // Claim GMX Rewards
         REWARDS_ROUTER.handleRewards(true, false, true, false, false, true, false);
-        return new TokenAmount[](0);
+
+        // Trivially Process WETH
+        // TODO: Create a WETH Strategy
+        uint256 wethHarvested = WETH.balanceOf(address(this));
+        harvested[0].amount = wethHarvested;
+        _processExtraToken(WETH_ADDRESS, wethHarvested);
+
+        // Compound FS_GLP and report to vault
+        _compoundGlp();
+        uint256 fsGlpHarvested = FS_GLP.balanceOf(address(this)) - fsGlpBalance;
+        harvested[1].amount = fsGlpHarvested;
+        _reportToVault(fsGlpHarvested);
+
+        return harvested;
     }
 
     function _tend() internal override returns (TokenAmount[] memory tended){
         return new TokenAmount[](0);
     }
 
+    function _compoundGlp() internal {
+        // setup token approvals for swap
+        GMX.safeApprove(recipient, 0);
+        GMX.safeApprove(recipient, amount);
+
+        // TODO: UniV3 execute the swap
+
+        uint256 wethOut = WETH.balanceOf(address(this));
+
+        // TODO: Find a way to estimate GLP min out
+        REWARDS_ROUTER.mintAndStakeGlp(WETH_ADDRESS, wethOut, 0, 0);
+    }
+
     /// @dev Return the balance (in want) that the strategy has invested somewhere
     function balanceOfPool() public view override returns (uint256) {
         // Change this to return the amount of want invested in another protocol
-        return 0;
+        return FS_GLP.balanceOf(address(this));
     }
 
     /// @dev Return the balance of rewards that the strategy has accrued
