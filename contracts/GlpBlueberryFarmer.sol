@@ -15,6 +15,7 @@ import {IRewardTracker} from "interfaces/gmx/IRewardTracker.sol";
 import {IGlpManager} from "interfaces/gmx/IGlpManager.sol";
 import {IGmxVault} from "interfaces/gmx/IGmxVault.sol";
 import {IVester} from "interfaces/gmx/IVester.sol";
+import {IRewardDistributor} from "interfaces/gmx/IRewardDistributor.sol";
 
 import {ISwapRouter} from "interfaces/uniswap/ISwapRouter.sol";
 import {IQuoter} from "interfaces/uniswap/IQuoter.sol";
@@ -109,7 +110,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
         uint256 postWithdraw = balance + balanceOfPool() - _amount;
         if (balance < _amount || postWithdraw <= rebalanceThreshold) {
             vester.withdraw();
-            _handleEsGmxVesting(_calcBuffer(postWithdraw));
+            _handleEsGmxVesting(ES_GMX.balanceOf(address(this)), _calcBuffer(postWithdraw));
         }
         // no-op, want is a fee staked token
         return _amount;
@@ -130,9 +131,10 @@ contract GlpBlueberryFarmer is BaseStrategy {
     }
 
     function _harvest() internal override returns (TokenAmount[] memory harvested) {
-        harvested = new TokenAmount[](2);
+        harvested = new TokenAmount[](3);
         harvested[0].token = WETH_ADDRESS;
         harvested[1].token = want;
+        harvested[2].token = ES_GMX_ADDRESS;
 
         uint256 fsGlpBalance = FS_GLP.balanceOf(address(this));
 
@@ -171,36 +173,38 @@ contract GlpBlueberryFarmer is BaseStrategy {
                 })
             );
 
+            // compound vested gmx into glp
             uint256 wethBalance = WETH.balanceOf(address(this));
-            // TODO: Find a way to estimate GLP min out
             REWARDS_ROUTER.mintAndStakeGlp(WETH_ADDRESS, wethBalance, 0, _getMinGlpOut(wethBalance));
 
+            // account for harvested glp
             uint256 fsGlpHarvested = FS_GLP.balanceOf(address(this)) - fsGlpBalance;
             harvested[1].amount = fsGlpHarvested;
             _reportToVault(fsGlpHarvested);
         }
 
-        _handleEsGmxVesting(_calcBuffer(balanceOfWant()));
+        uint256 esGmxBalance = ES_GMX.balanceOf(address(this));
+        _handleEsGmxVesting(esGmxBalance, _calcBuffer(balanceOfWant()));
+        harvested[2].amount = esGmxBalance;
 
         return harvested;
     }
 
     /// @dev optimizes esgmx play for maximal compounding and fee generation
-    function _handleEsGmxVesting(uint256 _maxReserve) internal {
-        uint256 esGmxBalance = ES_GMX.balanceOf(address(this));
+    function _handleEsGmxVesting(uint256 _esGmxBalance, uint256 _maxReserve) internal {
         uint256 maxVest = vester.getMaxVestableAmount(address(this));
         uint256 stakedEsGmx = _stakedEsGmx();
 
         // always try to vest maximally, unstake if needed
-        if (maxVest > esGmxBalance && stakedEsGmx != 0) {
-            REWARDS_ROUTER.unstakeEsGmx(MathUpgradeable.min(stakedEsGmx, maxVest - esGmxBalance));
+        if (maxVest > _esGmxBalance && stakedEsGmx != 0) {
+            REWARDS_ROUTER.unstakeEsGmx(MathUpgradeable.min(stakedEsGmx, maxVest - _esGmxBalance));
         }
 
-        esGmxBalance = ES_GMX.balanceOf(address(this));
+        _esGmxBalance = ES_GMX.balanceOf(address(this));
 
         // if we have esgmx, try to vest it in the glp vault
-        if (esGmxBalance != 0) {
-            uint256 canVest = MathUpgradeable.min(maxVest, esGmxBalance);
+        if (_esGmxBalance != 0) {
+            uint256 canVest = MathUpgradeable.min(maxVest, _esGmxBalance);
             uint256 reservationRatio = vester.getPairAmount(address(this), 1);
             uint256 toVest = MathUpgradeable.min(canVest, _maxReserve / reservationRatio);
 
@@ -210,7 +214,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
             }
 
             // stake remaining esgmx to earn weth, esgmx, and mp
-            uint256 esGmxRemainingBalance = esGmxBalance - toVest;
+            uint256 esGmxRemainingBalance = _esGmxBalance - toVest;
             if (esGmxRemainingBalance != 0) {
                 REWARDS_ROUTER.stakeEsGmx(esGmxRemainingBalance);
             }
@@ -230,10 +234,13 @@ contract GlpBlueberryFarmer is BaseStrategy {
     /// @notice Used for offChain APY and Harvest Health monitoring
     function balanceOfRewards() external view override returns (TokenAmount[] memory rewards) {
         rewards = new TokenAmount[](2);
-        uint256 claimableWeth = IRewardTracker(REWARDS_ROUTER.feeGlpTracker()).claimable(address(this));
+        IRewardTracker feeGlpTracker = IRewardTracker(REWARDS_ROUTER.feeGlpTracker());
+        uint256 claimableWeth = IRewardDistributor(feeGlpTracker.distributor()).claimable(address(this));
         rewards[0] = TokenAmount(WETH_ADDRESS, claimableWeth);
         uint256 claimableGmx = IVester(REWARDS_ROUTER.glpVester()).claimable(address(this));
         rewards[1] = TokenAmount(GMX_ADDRESS, claimableGmx);
+        uint256 claimableEsGmx = feeGlpTracker.claimable(address(this));
+        rewards[2] = TokenAmount(ES_GMX_ADDRESS, claimableEsGmx);
         return rewards;
     }
 
