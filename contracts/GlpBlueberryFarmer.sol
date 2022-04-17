@@ -12,7 +12,10 @@ import {BaseStrategy} from "./strategy/BaseStrategy.sol";
 
 import {IRewardRouter} from "interfaces/gmx/IRewardRouter.sol";
 import {IRewardTracker} from "interfaces/gmx/IRewardTracker.sol";
+import {IGlpManager} from "interfaces/gmx/IGlpManager.sol";
+import {IGmxVault} from "interfaces/gmx/IGmxVault.sol";
 import {IVester} from "interfaces/gmx/IVester.sol";
+
 import {ISwapRouter} from "interfaces/uniswap/ISwapRouter.sol";
 import {IQuoter} from "interfaces/uniswap/IQuoter.sol";
 
@@ -21,7 +24,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
     using SafeMathUpgradeable for uint256;
 
     // Strategy Variables
-    uint24 public constant LOW_FEE = 3000; 
+    uint24 public constant LOW_FEE = 3000;
     uint24 public constant HIGH_FEE = 10000;
 
     // Contract Addresses
@@ -32,6 +35,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
     address public constant FS_GLP_ADDRESS = 0x1aDDD80E6039594eE970E5872D247bf0414C8903;
     address public constant GMX_ETH_POOL_ADDRESS = 0x80A9ae39310abf666A87C743d6ebBD0E8C42158E;
     address public constant REWARDS_ROUTER_ADDRESS = 0xA906F338CB21815cBc4Bc87ace9e68c87eF8d8F1;
+    address public constant VAULT_ADDRESS = 0x489ee077994B6658eAfA855C308275EAd8097C4A;
 
     // Contract Interfaces
     IERC20Upgradeable public constant WETH = IERC20Upgradeable(WETH_ADDRESS);
@@ -40,10 +44,12 @@ contract GlpBlueberryFarmer is BaseStrategy {
     IERC20Upgradeable public constant S_GLP = IERC20Upgradeable(S_GLP_ADDRESS);
     IERC20Upgradeable public constant FS_GLP = IERC20Upgradeable(FS_GLP_ADDRESS);
     IRewardRouter public constant REWARDS_ROUTER = IRewardRouter(REWARDS_ROUTER_ADDRESS);
+    IGmxVault public constant GMX_VAULT = IGmxVault(VAULT_ADDRESS);
 
     ISwapRouter public router;
     IQuoter public quoter;
     IVester public vester;
+    IGlpManager public glpManager;
 
     uint256 public vestingBufferBps;
 
@@ -57,13 +63,14 @@ contract GlpBlueberryFarmer is BaseStrategy {
 
         want = FS_GLP_ADDRESS;
         vester = IVester(REWARDS_ROUTER.glpVester());
+        glpManager = IGlpManager(REWARDS_ROUTER.glpManager());
 
         vestingBufferBps = 3_000;
 
         GMX.safeApprove(_swapConfig[0], type(uint256).max);
         WETH.safeApprove(REWARDS_ROUTER.glpManager(), type(uint256).max);
     }
-    
+
     /// @dev Return the name of the strategy
     function getName() external pure override returns (string memory) {
         return "GlpBlueberryFarmer";
@@ -96,9 +103,13 @@ contract GlpBlueberryFarmer is BaseStrategy {
     /// @dev Withdraw `_amount` of want, so that it can be sent to the vault / depositor
     /// @notice just unlock the funds and return the amount you could unlock
     function _withdrawSome(uint256 _amount) internal override returns (uint256) {
-        if (balanceOfWant() < _amount) {
+        uint256 balance = balanceOfWant();
+        uint256 rebalanceThreshold = _calcBuffer(balance - _amount);
+        // if we withdraw too much, rebalance a bit to fix the buffer
+        uint256 postWithdraw = balance + balanceOfPool() - _amount;
+        if (balance < _amount || postWithdraw <= rebalanceThreshold) {
             vester.withdraw();
-            _handleEsGmxVesting(_calcBuffer(balanceOfWant() - _amount));
+            _handleEsGmxVesting(_calcBuffer(postWithdraw));
         }
         // no-op, want is a fee staked token
         return _amount;
@@ -114,7 +125,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
     }
 
     /// @dev no-op, want is a fee staked token
-    function _isTendable() internal override pure returns (bool) {
+    function _isTendable() internal pure override returns (bool) {
         return false;
     }
 
@@ -141,22 +152,10 @@ contract GlpBlueberryFarmer is BaseStrategy {
         // Compound FS_GLP and report to vault
         if (gmxBalance > 0) {
             // Estimate Low Fee Output
-            uint256 lowFeeOut = quoter.quoteExactInputSingle(
-                GMX_ADDRESS,
-                WETH_ADDRESS,
-                LOW_FEE,
-                gmxBalance,
-                0
-            );
+            uint256 lowFeeOut = quoter.quoteExactInputSingle(GMX_ADDRESS, WETH_ADDRESS, LOW_FEE, gmxBalance, 0);
 
             // Estimate High Fee Output
-            uint256 highFeeOut = quoter.quoteExactInputSingle(
-                GMX_ADDRESS,
-                WETH_ADDRESS,
-                HIGH_FEE,
-                gmxBalance,
-                0
-            );
+            uint256 highFeeOut = quoter.quoteExactInputSingle(GMX_ADDRESS, WETH_ADDRESS, HIGH_FEE, gmxBalance, 0);
 
             // Select Best Fee
             uint24 swapFee = lowFeeOut > highFeeOut ? LOW_FEE : HIGH_FEE;
@@ -174,7 +173,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
 
             uint256 wethBalance = WETH.balanceOf(address(this));
             // TODO: Find a way to estimate GLP min out
-            REWARDS_ROUTER.mintAndStakeGlp(WETH_ADDRESS, wethBalance, 0, 0);
+            REWARDS_ROUTER.mintAndStakeGlp(WETH_ADDRESS, wethBalance, 0, _getMinGlpOut(wethBalance));
 
             uint256 fsGlpHarvested = FS_GLP.balanceOf(address(this)) - fsGlpBalance;
             harvested[1].amount = fsGlpHarvested;
@@ -186,26 +185,31 @@ contract GlpBlueberryFarmer is BaseStrategy {
         return harvested;
     }
 
+    /// @dev optimizes esgmx play for maximal compounding and fee generation
     function _handleEsGmxVesting(uint256 _maxReserve) internal {
         uint256 esGmxBalance = ES_GMX.balanceOf(address(this));
         uint256 maxVest = vester.getMaxVestableAmount(address(this));
         uint256 stakedEsGmx = _stakedEsGmx();
 
+        // always try to vest maximally, unstake if needed
         if (maxVest > esGmxBalance && stakedEsGmx != 0) {
             REWARDS_ROUTER.unstakeEsGmx(MathUpgradeable.min(stakedEsGmx, maxVest - esGmxBalance));
         }
-        
+
         esGmxBalance = ES_GMX.balanceOf(address(this));
-        
+
+        // if we have esgmx, try to vest it in the glp vault
         if (esGmxBalance != 0) {
             uint256 canVest = MathUpgradeable.min(maxVest, esGmxBalance);
             uint256 reservationRatio = vester.getPairAmount(address(this), 1);
             uint256 toVest = MathUpgradeable.min(canVest, _maxReserve / reservationRatio);
 
+            // only vest using reserve up to some % buffer of the GLP
             if (toVest != 0) {
                 vester.deposit(toVest);
             }
 
+            // stake remaining esgmx to earn weth, esgmx, and mp
             uint256 esGmxRemainingBalance = esGmxBalance - toVest;
             if (esGmxRemainingBalance != 0) {
                 REWARDS_ROUTER.stakeEsGmx(esGmxRemainingBalance);
@@ -213,7 +217,7 @@ contract GlpBlueberryFarmer is BaseStrategy {
         }
     }
 
-    function _tend() internal override returns (TokenAmount[] memory tended){
+    function _tend() internal override returns (TokenAmount[] memory tended) {
         return new TokenAmount[](0);
     }
 
@@ -239,5 +243,16 @@ contract GlpBlueberryFarmer is BaseStrategy {
 
     function _stakedEsGmx() internal returns (uint256) {
         return IRewardTracker(REWARDS_ROUTER.feeGmxTracker()).depositBalances(address(this), REWARDS_ROUTER.bonusGmxTracker());
+    }
+
+    function _getMinGlpOut(uint256 _input) internal returns (uint256) {
+        uint256 glpPrice = _glpPrice(true);
+        return (_input * glpPrice) / GMX_VAULT.getMinPrice(WETH_ADDRESS);
+    }
+
+    function _glpPrice(bool _isBuying) internal returns (uint256) {
+        uint256[] memory aums = glpManager.getAums();
+        uint256 aum = _isBuying ? aums[0] : aums[1];
+        return aum / FS_GLP.totalSupply();
     }
 }

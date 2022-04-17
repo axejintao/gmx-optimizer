@@ -32,12 +32,12 @@ contract TheVault is Vault {
 
     /// ===== Internal Implementations =====
 
-    /// @notice Deposits `_amount` tokens, issuing shares to `recipient`. 
-    ///         Note that deposits are not accepted when `pausedDeposit` is true. 
+    /// @notice Deposits `_amount` tokens, issuing shares to `recipient`.
+    ///         Note that deposits are not accepted when `pausedDeposit` is true.
     /// @dev This is the actual deposit operation.
     ///      Deposits are based on the realized value of underlying assets between Sett & associated Strategy
     /// @param _recipient Address to issue the Sett shares to.
-    /// @param _amount Quantity of tokens to deposit. 
+    /// @param _amount Quantity of tokens to deposit.
     function _depositFor(address _recipient, uint256 _amount) internal override nonReentrant {
         require(_recipient != address(0), "Address 0");
         require(_amount != 0, "Amount 0");
@@ -52,10 +52,10 @@ contract TheVault is Vault {
 
     /// @notice Redeems `_shares` for an appropriate amount of tokens.
     /// @dev This is the actual withdraw operation.
-    ///      Withdraws from strategy positions if sett doesn't contain enough tokens to process the withdrawal. 
+    ///      Withdraws from strategy positions if sett doesn't contain enough tokens to process the withdrawal.
     ///      Calculates withdrawal fees and issues corresponding shares to treasury.
     ///      No rebalance implementation for lower fees and faster swaps
-    /// @param _shares Quantity of shares to redeem. 
+    /// @param _shares Quantity of shares to redeem.
     function _withdraw(uint256 _shares) internal override nonReentrant {
         require(_shares != 0, "0 Shares");
 
@@ -80,7 +80,7 @@ contract TheVault is Vault {
 
         // After you burned the shares, and you have sent the funds, adding here is equivalent to depositing
         // Process withdrawal fee
-        if(_fee > 0) {
+        if (_fee > 0) {
             _mintSharesFor(treasury, _fee, balance().sub(_fee));
         }
     }
