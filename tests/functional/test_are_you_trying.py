@@ -2,7 +2,7 @@ from brownie import *
 from helpers.constants import MaxUint256
 
 
-def test_are_you_trying(deployer, vault, strategy, want, governance):
+def test_are_you_trying(deployer, vault, strategy, want, wantProxy, governance):
     """
     Verifies that you set up the Strategy properly
     """
@@ -17,11 +17,18 @@ def test_are_you_trying(deployer, vault, strategy, want, governance):
     # Deposit
     assert want.balanceOf(vault) == 0
 
-    want.approve(vault, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault, MaxUint256, {"from": deployer})
     vault.deposit(depositAmount, {"from": deployer})
+
+    # ensure we can do multiple deposits 
+    newDepositAmount = want.balanceOf(deployer) // 2
+    depositAmount += newDepositAmount
+    vault.deposit(newDepositAmount, {"from": deployer})
 
     available = vault.available()
     assert available > 0
+
+    chain.sleep(10000 * 13)  # Mine so we get past the cooldown period
 
     vault.earn({"from": governance})
 
@@ -30,22 +37,15 @@ def test_are_you_trying(deployer, vault, strategy, want, governance):
     ## TEST 1: Does the want get used in any way?
     assert want.balanceOf(vault) == depositAmount - available
 
-    # Did the strategy do something with the asset?
-    assert want.balanceOf(strategy) < available
-
-    # Use this if it should invest all
-    # assert want.balanceOf(strategy) == 0
+    assert want.balanceOf(strategy) == depositAmount - want.balanceOf(vault)
 
     # Change to this if the strat is supposed to hodl and do nothing
     # assert strategy.balanceOf(want) = depositAmount
 
     ## TEST 2: Is the Harvest profitable?
     harvest = strategy.harvest({"from": governance})
-    event = harvest.events["Harvested"]
-    # If it doesn't print, we don't want it
-    assert event["amount"] > 0
 
     ## TEST 3: Does the strategy emit anything?
     event = harvest.events["TreeDistribution"]
-    assert event["token"] == "TOKEN" ## Add token you emit
+    assert event["token"] == "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1" ## Add token you emit
     assert event["amount"] > 0 ## We want it to emit something

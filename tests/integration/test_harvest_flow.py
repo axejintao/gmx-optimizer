@@ -5,7 +5,7 @@ from helpers.SnapshotManager import SnapshotManager
 from helpers.time import days
 
 
-def test_deposit_withdraw_single_user_flow(deployer, vault, strategy, want, keeper):
+def test_deposit_withdraw_single_user_flow(deployer, vault, strategy, want, wantProxy, keeper):
     # Setup
     snap = SnapshotManager(vault, strategy, "StrategySnapshot")
     randomUser = accounts[6]
@@ -17,7 +17,7 @@ def test_deposit_withdraw_single_user_flow(deployer, vault, strategy, want, keep
     depositAmount = int(want.balanceOf(deployer) * 0.8)
     assert depositAmount > 0
 
-    want.approve(vault.address, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault.address, MaxUint256, {"from": deployer})
 
     vault.deposit(depositAmount, {"from": deployer})
 
@@ -41,7 +41,7 @@ def test_deposit_withdraw_single_user_flow(deployer, vault, strategy, want, keep
 
 
 def test_single_user_harvest_flow(
-    deployer, vault, strategy, want, keeper
+    deployer, vault, strategy, want, wantProxy, keeper
 ):
     # Setup
     snap = SnapshotManager(vault, strategy, "StrategySnapshot")
@@ -54,7 +54,7 @@ def test_single_user_harvest_flow(
     # End Setup
 
     # Deposit
-    want.approve(vault, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault, MaxUint256, {"from": deployer})
     snap.settDeposit(depositAmount, {"from": deployer})
     shares = vault.balanceOf(deployer)
 
@@ -96,10 +96,11 @@ def test_single_user_harvest_flow(
     chain.mine()
 
     snap.settHarvest({"from": keeper})
+    chain.sleep(days(0.1))
     snap.settWithdraw(shares // 2 - 1, {"from": deployer})
 
 
-def test_migrate_single_user(deployer, vault, strategy, want, governance, keeper):
+def test_migrate_single_user(deployer, vault, strategy, want, wantProxy, governance, keeper):
     # Setup
     randomUser = accounts[6]
     snap = SnapshotManager(vault, strategy, "StrategySnapshot")
@@ -110,7 +111,7 @@ def test_migrate_single_user(deployer, vault, strategy, want, governance, keeper
     # End Setup
 
     # Deposit
-    want.approve(vault, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault, MaxUint256, {"from": deployer})
     snap.settDeposit(depositAmount, {"from": deployer})
 
     chain.sleep(15)
@@ -188,7 +189,7 @@ def test_migrate_single_user(deployer, vault, strategy, want, governance, keeper
     assert after["stratWant"] == 0
 
 
-def test_single_user_harvest_flow_remove_fees(deployer, vault, strategy, want, keeper):
+def test_single_user_harvest_flow_remove_fees(deployer, vault, strategy, want, weth, wantProxy, keeper):
     # Setup
     randomUser = accounts[6]
     snap = SnapshotManager(vault, strategy, "StrategySnapshot")
@@ -200,7 +201,7 @@ def test_single_user_harvest_flow_remove_fees(deployer, vault, strategy, want, k
     # End Setup
 
     # Deposit
-    want.approve(vault, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault, MaxUint256, {"from": deployer})
     snap.settDeposit(depositAmount, {"from": deployer})
 
     # Earn
@@ -221,7 +222,9 @@ def test_single_user_harvest_flow_remove_fees(deployer, vault, strategy, want, k
     snap.settHarvest({"from": keeper})
 
     ## If the strategy is printing, this should be true
-    assert vault.balanceOf(vault.treasury()) > 0
+    is_printing = vault.balanceOf(vault.treasury()) > 0
+    is_emitting = weth.balanceOf(vault.treasury()) > 0
+    assert is_printing or is_emitting
     ## If the strategy is not printing, add checks here to verify that tokens were emitted
 
     chain.sleep(days(1))
@@ -234,6 +237,8 @@ def test_single_user_harvest_flow_remove_fees(deployer, vault, strategy, want, k
     chain.mine()
 
     snap.settHarvest({"from": keeper})
+
+    chain.sleep(900) # GLP Staking Cooldown
 
     snap.settWithdrawAll({"from": deployer})
 

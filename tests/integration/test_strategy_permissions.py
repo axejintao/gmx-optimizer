@@ -4,7 +4,7 @@ from helpers.constants import MaxUint256, AddressZero
 from helpers.time import days
 
 
-def state_setup(deployer, vault, strategy, want, keeper):
+def state_setup(deployer, vault, strategy, want, wantProxy, keeper):
     startingBalance = want.balanceOf(deployer)
 
     tendable = strategy.isTendable()
@@ -13,7 +13,7 @@ def state_setup(deployer, vault, strategy, want, keeper):
     depositAmount = int(startingBalance * 0.8)
     assert startingBalance >= depositAmount
 
-    want.approve(vault, MaxUint256, {"from": deployer})
+    wantProxy.approve(vault, MaxUint256, {"from": deployer})
     vault.deposit(depositAmount, {"from": deployer})
 
     chain.sleep(days(1))
@@ -39,8 +39,8 @@ def state_setup(deployer, vault, strategy, want, keeper):
     accounts.at(vault, force=True)
 
 
-def test_strategy_action_permissions(deployer, vault, strategy, want, keeper):
-    state_setup(deployer, vault, strategy, want, keeper)
+def test_strategy_action_permissions(deployer, vault, strategy, want, wantProxy, keeper):
+    state_setup(deployer, vault, strategy, want, wantProxy, keeper)
 
     tendable = strategy.isTendable()
 
@@ -82,6 +82,8 @@ def test_strategy_action_permissions(deployer, vault, strategy, want, keeper):
         strategy.keeper(),
     ]
 
+    chain.sleep(901)  ## 15 mins to withdraw
+
     # withdrawToVault onlyVault
     for actor in actorsToCheck:
         if actor == strategy.governance() or actor == strategy.strategist():
@@ -104,9 +106,9 @@ def test_strategy_action_permissions(deployer, vault, strategy, want, keeper):
                 vault.sweepExtraToken(vault, {"from": actor})
 
 
-def test_strategy_pausing_permissions(deployer, vault, strategy, want, keeper):
+def test_strategy_pausing_permissions(deployer, vault, strategy, want, wantProxy, keeper):
     # Setup
-    state_setup(deployer, vault, strategy, want, keeper)
+    state_setup(deployer, vault, strategy, want, wantProxy, keeper)
     randomUser = accounts[8]
     # End Setup
 
@@ -154,9 +156,9 @@ def test_strategy_pausing_permissions(deployer, vault, strategy, want, keeper):
         strategy.tend({"from": keeper})
 
 
-def test_sett_pausing_permissions(deployer, vault, strategy, want, keeper):
+def test_sett_pausing_permissions(deployer, vault, strategy, want, wantProxy, keeper):
     # Setup
-    state_setup(deployer, vault, strategy, want, keeper)
+    state_setup(deployer, vault, strategy, want, wantProxy, keeper)
     randomUser = accounts[8]
     # End Setup
 
@@ -206,9 +208,9 @@ def test_sett_pausing_permissions(deployer, vault, strategy, want, keeper):
 
 
 
-def test_sett_earn_permissions(deployer, vault, strategy, want, keeper):
+def test_sett_earn_permissions(deployer, vault, strategy, want, wantProxy, keeper):
     # Setup
-    state_setup(deployer, vault, strategy, want, keeper)
+    state_setup(deployer, vault, strategy, want, wantProxy, keeper)
     randomUser = accounts[8]
     # End Setup
 

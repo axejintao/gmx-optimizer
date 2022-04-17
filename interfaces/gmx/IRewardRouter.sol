@@ -15,13 +15,29 @@ interface IRewardRouter {
         bool _shouldConvertWethToEth
     ) external;
 
+  function stakeEsGmx(uint256 _amount) external;
+
+  function stakeGmx(uint256 _amount) external;
+
+  function unstakeEsGmx(uint256 _amount) external;
+
+  function unstakeGmx(uint256 _amount) external;
+
   function mintAndStakeGlp(address _token, uint256 _amount, uint256 _minUsdg, uint256 _minGlp) external returns (uint256);
   
   function unstakeAndRedeemGlp(address _tokenOut, uint256 _glpAmount, uint256 _minOut, address _receiver) external returns (uint256);
 
-  function gmxVester() external returns (address);
+  function claimable(address _account) external view returns (uint256);
 
-  function glpVester() external returns (address);
+  function feeGlpTracker() external view returns (address);
 
-  function glpManager() external returns (address);
+  function feeGmxTracker() external view returns (address);
+
+  function bonusGmxTracker() external view returns (address);
+
+  function gmxVester() external view returns (address);
+
+  function glpVester() external view returns (address);
+  
+  function glpManager() external view returns (address);
 }

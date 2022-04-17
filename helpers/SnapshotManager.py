@@ -44,7 +44,7 @@ class SnapshotManager:
         return calls
 
     def snap(self, trackedUsers=None):
-        print("snap")
+        # print("snap")
         snapBlock = chain.height
         entities = self.entities
 
@@ -69,7 +69,7 @@ class SnapshotManager:
         self.entities[key] = entity
 
     def init_resolver(self, name):
-        print("init_resolver", name)
+        # print("init_resolver", name)
         return StrategyResolver(self)
 
     def settTend(self, overrides, confirm=True):
@@ -176,7 +176,7 @@ class SnapshotManager:
                 self.key, before.block, after.block
             )
         )
-
+        
         for key, item in before.data.items():
 
             a = item

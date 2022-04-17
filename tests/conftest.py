@@ -8,6 +8,7 @@ from brownie import (
 )
 from _setup.config import (
     WANT, 
+    WANT_PROXY,
     WHALE_ADDRESS,
 
     PERFORMANCE_FEE_GOVERNANCE,
@@ -37,18 +38,24 @@ def user():
 ## Fund the account
 @pytest.fixture
 def want(deployer):
-    """
-        TODO: Customize this so you have the token you need for the strat
-    """
     TOKEN_ADDRESS = WANT
-    token = interface.IERC20Detailed(TOKEN_ADDRESS)
+    TOKEN_PROXY_ADDRESS = WANT_PROXY
+    feeStakedGlp = interface.IERC20Detailed(TOKEN_ADDRESS)
+    stakedGlp = interface.IERC20Detailed(TOKEN_PROXY_ADDRESS)
     WHALE = accounts.at(WHALE_ADDRESS, force=True) ## Address with tons of token
 
-    token.transfer(deployer, token.balanceOf(WHALE), {"from": WHALE})
-    return token
+    stakedGlp.approve(deployer, feeStakedGlp.balanceOf(WHALE), {"from": WHALE})
+    stakedGlp.transferFrom(WHALE, deployer, feeStakedGlp.balanceOf(WHALE) / 5, {"from": deployer})
+    return feeStakedGlp
 
+@pytest.fixture
+def weth():
+    return interface.IERC20Detailed('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
 
-
+@pytest.fixture
+def wantProxy():
+    TOKEN_PROXY_ADDRESS = WANT_PROXY
+    return interface.IERC20Detailed(TOKEN_PROXY_ADDRESS)
 
 @pytest.fixture
 def strategist():
@@ -118,8 +125,10 @@ def deployed(want, deployer, strategist, keeper, guardian, governance, proxyAdmi
     vault.setStrategist(deployer, {"from": governance})
     # NOTE: TheVault starts unpaused
 
+    # address public constant SWAP_ROUTER_ADDRESS = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    # address public constant SWAP_QUOTER_ADDRESS = 0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6;
     strategy = GlpBlueberryFarmer.deploy({"from": deployer})
-    strategy.initialize(vault, [want])
+    strategy.initialize(vault, ['0xE592427A0AEce92De3Edee1F18E0157C05861564', '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6'])
     # NOTE: Strategy starts unpaused
 
     vault.setStrategy(strategy, {"from": governance})
